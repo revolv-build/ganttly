@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Account - {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page" style="max-width:560px;">
+  <h1>Account</h1>
+  <div class="sub">Update your details</div>
+
+  <div class="card mb-16">
+    <h2>Profile Photo</h2>
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;">
+      {% if user.avatar_path %}
+      <img src="/uploads/{{ user.avatar_path }}" style="width:64px;height:64px;border-radius:50%;object-fit:cover;border:2px solid #2a2a4a;" />
+      {% else %}
+      <div class="profile-avatar" style="width:64px;height:64px;font-size:24px;">{{ user.name[0] | upper }}</div>
+      {% endif %}
+      <form method="POST" action="/account/avatar" enctype="multipart/form-data" style="flex:1;">
+        <input name="avatar" type="file" accept="image/jpeg,image/png,image/webp,image/gif" />
+        <div style="margin-top:8px;"><button class="btn btn-primary btn-sm">Upload Photo</button></div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Profile</h2>
+    <form method="POST" action="/account/profile">
+      <div class="field"><div class="label">Name</div><input name="name" value="{{ user.name }}" required /></div>
+      <div class="field"><div class="label">Email</div><input name="email" type="email" value="{{ user.email }}" required /></div>
+      <div class="field"><div class="label">Bio</div><textarea name="bio" placeholder="Tell us about yourself...">{{ user.bio or '' }}</textarea></div>
+      <div class="field"><div class="label">Location</div><input name="location" value="{{ user.location or '' }}" placeholder="e.g. London, UK" /></div>
+      <div class="field"><div class="label">Website</div><input name="website" value="{{ user.website or '' }}" placeholder="https://..." /></div>
+      <button class="btn btn-primary">Save Profile</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Change Password</h2>
+    <form method="POST" action="/account/password">
+      <div class="field"><div class="label">Current password</div><input name="current" type="password" required /></div>
+      <div class="field"><div class="label">New password</div><input name="new" type="password" required /></div>
+      <button class="btn btn-primary">Update Password</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Your Data</h2>
+    <p style="font-size:13px;color:#888;margin-bottom:12px;">Download a copy of all your data or permanently delete your account.</p>
+    <div class="flex gap-8">
+      <a href="/account/export" class="btn btn-ghost">Download My Data (JSON)</a>
+      <form method="POST" action="/account/delete" onsubmit="return confirm('This will permanently delete your account and ALL your data. This cannot be undone. Are you sure?')">
+        <button class="btn btn-danger">Delete My Account</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

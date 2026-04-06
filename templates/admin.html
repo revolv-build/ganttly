@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Admin - {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page" style="max-width:1200px;">
+
+  <div class="adm-header">
+    <div>
+      <h1 class="adm-title">Admin</h1>
+      <div class="adm-subtitle">Platform overview and management</div>
+    </div>
+    <div class="adm-header-actions">
+      <div class="adm-pulse"><span class="adm-pulse-dot"></span> Live</div>
+    </div>
+  </div>
+
+  <div class="adm-stats">
+    <div class="adm-stat">
+      <div class="adm-stat-icon adm-stat-blue">&#9673;</div>
+      <div>
+        <div class="adm-stat-value">{{ stats.total_users }}</div>
+        <div class="adm-stat-label">Users</div>
+      </div>
+      {% if stats.new_users_7d > 0 %}
+      <div class="adm-stat-delta adm-delta-up">+{{ stats.new_users_7d }} this week</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="adm-tabs">
+    <a href="/admin" class="adm-tab {{ 'active' if tab == 'users' else '' }}">
+      <span class="adm-tab-icon">&#9673;</span> Users
+    </a>
+    <a href="/admin?tab=activity" class="adm-tab {{ 'active' if tab == 'activity' else '' }}">
+      <span class="adm-tab-icon">&#9889;</span> Activity
+    </a>
+  </div>
+
+  {% if tab == 'activity' %}
+  <div class="adm-panel">
+    <div class="adm-panel-header">
+      <h2>Recent Activity</h2>
+      <span class="adm-count">{{ activity | length }} events</span>
+    </div>
+    {% if activity %}
+    <div class="adm-activity">
+      {% for item in activity %}
+      <div class="adm-activity-row">
+        <div class="adm-activity-icon adm-ai-{{ item.type }}">
+          {% if item.type == 'signup' %}+{% endif %}
+        </div>
+        <div class="adm-activity-body">
+          {% if item.type == 'signup' %}
+            <strong>{{ item.user_name }}</strong> signed up
+          {% endif %}
+        </div>
+        <div class="adm-activity-time">{{ item.created | timeago }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="adm-empty">No activity yet.</div>
+    {% endif %}
+  </div>
+
+  {% else %}
+  <div class="adm-panel">
+    <div class="adm-panel-header">
+      <h2>All Users</h2>
+      <span class="adm-count">{{ users | length }}</span>
+    </div>
+    <div class="adm-user-list">
+      {% for u in users %}
+      <div class="adm-user-row">
+        <div class="adm-user-avatar">{{ u.name[0] | upper }}</div>
+        <div class="adm-user-info">
+          <div class="adm-user-name">{{ u.name }}</div>
+          <div class="adm-user-email">{{ u.email }}</div>
+        </div>
+        <div class="adm-user-meta">
+          {% if u.is_admin %}
+          <span class="badge badge-owner">admin</span>
+          {% else %}
+          <span class="badge badge-member">user</span>
+          {% endif %}
+        </div>
+        <div class="adm-user-date">{{ u.created | timeago }}</div>
+        {% if u.id != current_user.id %}
+        <div class="adm-user-actions">
+          <form method="POST" action="/admin/users/{{ u.id }}/impersonate" style="display:inline;">
+            <button class="adm-action-btn adm-action-view" title="View as this user">&#9673;</button>
+          </form>
+          <form method="POST" action="/admin/users/{{ u.id }}/toggle-admin" style="display:inline;">
+            <button class="adm-action-btn" title="{{ 'Revoke admin' if u.is_admin else 'Make admin' }}">&#9881;</button>
+          </form>
+          <form method="POST" action="/admin/users/{{ u.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete {{ u.name }}?')">
+            <button class="adm-action-btn adm-action-danger" title="Delete user">&times;</button>
+          </form>
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

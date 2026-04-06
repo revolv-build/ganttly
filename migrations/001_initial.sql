@@ -1,0 +1,11 @@
+-- Initial migration (placeholder)
+-- The base schema is created in init_db() in app.py.
+-- Add new ALTER TABLE statements or CREATE TABLE statements here
+-- for schema changes after the initial release.
+--
+-- Example:
+-- ALTER TABLE users ADD COLUMN phone TEXT DEFAULT '';
+-- CREATE TABLE IF NOT EXISTS tags (
+--     id   INTEGER PRIMARY KEY AUTOINCREMENT,
+--     name TEXT NOT NULL UNIQUE
+-- );

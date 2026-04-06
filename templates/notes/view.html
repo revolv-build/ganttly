@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{{ note.title }} - {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page" style="max-width:720px;">
+  <div class="flex-between mb-24">
+    <div>
+      <h1>{{ note.title }}</h1>
+      <div class="sub" style="margin-bottom:0;">{{ note.updated | timeago }}</div>
+    </div>
+    <div class="flex gap-8">
+      <a href="/notes/{{ note.id }}/edit" class="btn btn-ghost">Edit</a>
+      <form method="POST" action="/notes/{{ note.id }}/delete" onsubmit="return confirm('Delete this note?')">
+        <button class="btn btn-danger">Delete</button>
+      </form>
+    </div>
+  </div>
+  <div class="card">
+    <div class="md-content">{{ note.body | markdown }}</div>
+  </div>
+</div>
+{% endblock %}

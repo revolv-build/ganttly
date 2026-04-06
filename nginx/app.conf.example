@@ -1,0 +1,38 @@
+# Nginx config — copy to /etc/nginx/sites-available/YOUR_APP
+# Then: ln -s /etc/nginx/sites-available/YOUR_APP /etc/nginx/sites-enabled/
+# Then: certbot --nginx -d YOUR_DOMAIN
+# Then: nginx -t && systemctl reload nginx
+
+server {
+    listen 80;
+    server_name YOUR_DOMAIN;
+
+    # Certbot will add SSL config here after running:
+    # certbot --nginx -d YOUR_DOMAIN
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Serve uploaded files directly
+    location /uploads/ {
+        alias /root/YOUR_APP/uploads/;
+        expires 7d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # Serve static files directly
+    location /static/ {
+        alias /root/YOUR_APP/static/;
+        expires 7d;
+        add_header Cache-Control "public, immutable";
+        gzip_static on;
+    }
+
+    # File upload size limit (match MAX_UPLOAD_MB in app.py)
+    client_max_body_size 50M;
+}

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+  <meta name="description" content="{% block description %}{{ app_name }}{% endblock %}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+</head>
+<body>
+  {% if current_user and current_user.is_admin and not session.get('impersonator_id') %}
+  <div class="admin-bar">
+    <div class="ab-left">
+      <span class="ab-pulse"></span>
+      <span class="ab-label">ADMIN</span>
+      <a href="/admin" class="ab-link"><span class="ab-icon">&#9635;</span><span class="ab-text">Dashboard</span></a>
+      <a href="/admin?tab=users" class="ab-link"><span class="ab-icon">&#9673;</span><span class="ab-text">Users</span></a>
+      <a href="/admin?tab=activity" class="ab-link"><span class="ab-icon">&#9889;</span><span class="ab-text">Activity</span></a>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if current_user %}
+  <nav>
+    <a href="/dashboard" class="logo">&#9672; {{ app_name }}</a>
+    <div class="nav-links">
+      <a href="/dashboard" {% if request.path == '/dashboard' %}class="active"{% endif %}>Dashboard</a>
+      <a href="/account" {% if request.path.startswith('/account') %}class="active"{% endif %}>Account</a>
+      <a href="/logout">Log out</a>
+    </div>
+  </nav>
+  {% endif %}
+
+  {% if session.get('impersonator_id') %}
+  <div class="impersonate-banner">
+    Viewing as <strong>{{ current_user.name }}</strong> ({{ current_user.email }})
+    <form method="POST" action="/admin/stop-impersonating" style="display:inline;">
+      <button class="btn btn-primary btn-sm" style="margin-left:12px;">Switch Back to Admin</button>
+    </form>
+  </div>
+  {% endif %}
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="page" style="padding-bottom:0;">
+        {% for category, message in messages %}
+          <div class="msg msg-{{ 'ok' if category == 'success' else 'err' }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+
+  <footer class="platform-footer">
+    <span>Powered by {{ app_name }}</span>
+    <span class="footer-sep">&middot;</span>
+    <a href="/terms">Terms</a>
+    <span class="footer-sep">&middot;</span>
+    <a href="/privacy">Privacy</a>
+    <span class="footer-sep">&middot;</span>
+    <a href="mailto:{{ support_email }}">Support</a>
+  </footer>
+  <div class="cookie-banner" id="cookie-banner" style="display:none;">
+    <span>We use cookies for session management only. No tracking, no ads.</span>
+    <button class="btn btn-primary btn-sm" onclick="document.getElementById('cookie-banner').style.display='none';localStorage.setItem('cookies_ok','1');">Got it</button>
+  </div>
+  <script>if(!localStorage.getItem('cookies_ok'))document.getElementById('cookie-banner').style.display='';</script>
+  <script src="{{ url_for('static', filename='csrf.js') }}"></script>
+  <script src="{{ url_for('static', filename='toast.js') }}"></script>
+</body>
+</html>

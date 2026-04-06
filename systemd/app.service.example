@@ -1,0 +1,18 @@
+# systemd service file — copy to /etc/systemd/system/YOUR_APP.service
+# Then: systemctl daemon-reload && systemctl enable YOUR_APP && systemctl start YOUR_APP
+
+[Unit]
+Description=YOUR_APP Flask Application
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/YOUR_APP
+Environment=FLASK_ENV=production
+ExecStart=/root/YOUR_APP/venv/bin/gunicorn -w 4 -b 127.0.0.1:5000 --timeout 30 --keep-alive 5 --access-logfile /var/log/YOUR_APP.log app:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

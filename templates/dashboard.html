@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - {{ app_name }}{% endblock %}
+{% block content %}
+<div class="page">
+  {% if current_user and not current_user.email_verified %}
+  <div class="verify-banner mb-16">
+    <span>Please verify your email address ({{ current_user.email }}) to get full access.</span>
+    <form method="POST" action="/resend-verification" style="display:inline;">
+      <button class="btn btn-primary btn-sm" style="margin-left:12px;">Resend Verification Email</button>
+    </form>
+  </div>
+  {% endif %}
+
+  <div class="flex-between mb-24">
+    <div>
+      <h1>Dashboard</h1>
+      <div class="sub" style="margin-bottom:0;">Welcome back, {{ current_user.name }}</div>
+    </div>
+    <a href="/notes/new" class="btn btn-primary">New Note</a>
+  </div>
+
+  {% if notes %}
+  <div class="card-list">
+    {% for n in notes %}
+    <a href="/notes/{{ n.id }}" class="item-card">
+      <div class="item-card-title">{{ n.title }}</div>
+      <div class="item-card-meta">{{ n.updated | timeago }}</div>
+      {% if n.body %}
+      <div class="item-card-preview">{{ n.body | strip_markdown | truncate(120) }}</div>
+      {% endif %}
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-state-icon">&#9998;</div>
+    <h2>No notes yet</h2>
+    <p>Create your first note to get started.</p>
+    <a href="/notes/new" class="btn btn-primary" style="margin-top:16px;">Create a Note</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
