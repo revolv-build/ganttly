@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Import Gantt Chart - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-mid">
+  <h1>Import Gantt Chart</h1>
+  <p class="sub">Upload a marketing Gantt CSV or XLSX to create an interactive chart.</p>
+
+  <form method="POST" enctype="multipart/form-data" class="card">
+    <div class="field">
+      <label class="label">Chart Name</label>
+      <input type="text" name="name" placeholder="e.g. Marketing Gantt 2026 (Q2 Remobi)" />
+      <div style="font-size:11px;color:#555;margin-top:4px;">Leave blank to use the filename.</div>
+    </div>
+
+    {% if groups %}
+    <div class="field">
+      <label class="label">Group</label>
+      <select name="group_id">
+        <option value="">No group</option>
+        {% for g in groups %}
+        <option value="{{ g.id }}" {% if selected_group_id == g.id|string %}selected{% endif %}>{{ g.name }}</option>
+        {% endfor %}
+      </select>
+      <div style="font-size:11px;color:#555;margin-top:4px;">Add to a group for tabbed navigation.</div>
+    </div>
+    {% endif %}
+
+    <div class="field">
+      <label class="label">Brand Colour</label>
+      <div class="flex gap-8" style="align-items:center;">
+        <input type="color" name="brand_color" value="#2a5a8a"
+               style="width:48px;height:36px;padding:2px;cursor:pointer;" />
+        <span style="font-size:12px;color:#555;">Accent colour for this chart</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="label">File</label>
+      <input type="file" name="csv_file" accept=".csv,.xlsx" required
+             style="padding:8px;background:#111;border:1px solid #2a2a2a;border-radius:6px;" />
+    </div>
+
+    <div class="flex gap-8 mt-16">
+      <button type="submit" class="btn btn-primary">Import</button>
+      <a href="/gantt" class="btn btn-ghost">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

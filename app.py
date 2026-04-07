@@ -12,6 +12,8 @@ Architecture:
   - Example CRUD: notes (delete when you build your own features)
 """
 
+import csv
+import io
 import json
 import os
 import re
@@ -254,6 +256,46 @@ def init_db():
             updated       TEXT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS gantt_groups (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            name       TEXT NOT NULL,
+            created    TEXT NOT NULL,
+            updated    TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS gantt_charts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     INTEGER NOT NULL,
+            name        TEXT NOT NULL,
+            weeks_json  TEXT NOT NULL DEFAULT '[]',
+            group_id    INTEGER DEFAULT NULL,
+            logo_path   TEXT DEFAULT '',
+            brand_color TEXT DEFAULT '#2a5a8a',
+            created     TEXT NOT NULL,
+            updated     TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (group_id) REFERENCES gantt_groups(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS gantt_rows (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            chart_id   INTEGER NOT NULL,
+            row_type   TEXT NOT NULL DEFAULT 'task',
+            action     TEXT NOT NULL DEFAULT '',
+            owner      TEXT DEFAULT '',
+            hours      REAL DEFAULT 0,
+            objective  TEXT DEFAULT '',
+            kpi        TEXT DEFAULT '',
+            status     TEXT DEFAULT 'not_started',
+            start_week TEXT DEFAULT '',
+            end_week   TEXT DEFAULT '',
+            notes_json TEXT DEFAULT '{}',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (chart_id) REFERENCES gantt_charts(id) ON DELETE CASCADE
+        );
     """)
 
     # Run migrations
@@ -375,7 +417,7 @@ def platform_admin_required(f):
 @app.route("/")
 def landing():
     if session.get("user_id"):
-        return redirect("/dashboard")
+        return redirect("/gantt")
     return render_template("landing.html")
 
 @app.route("/login", methods=["GET", "POST"])
@@ -759,6 +801,580 @@ def delete_note(nid):
     db.commit()
     flash("Note deleted.", "success")
     return redirect("/dashboard")
+
+# ══════════════════════════════════════════════════════════════════
+#  GANTT CHARTS
+# ══════════════════════════════════════════════════════════════════
+
+def parse_gantt_csv(file_content):
+    """Parse a marketing Gantt CSV and return structured data."""
+    reader = csv.reader(io.StringIO(file_content))
+    rows = list(reader)
+    if not rows:
+        return None
+
+    header = rows[0]
+
+    # Find week date columns and Objective/KPI positions
+    week_dates = []
+    objective_col = None
+    kpi_col = None
+
+    for i, col in enumerate(header):
+        col_stripped = col.strip()
+        if col_stripped == "Objective":
+            objective_col = i
+        elif col_stripped == "KPI":
+            kpi_col = i
+            break
+
+    # Week dates are between column 3 and the Objective column
+    end_col = objective_col if objective_col else len(header)
+    for i in range(3, end_col):
+        col_stripped = header[i].strip()
+        if not col_stripped:
+            continue
+        try:
+            dt = datetime.strptime(col_stripped, "%d-%b-%y")
+            week_dates.append((i, dt.strftime("%Y-%m-%d")))
+        except ValueError:
+            pass
+
+    if not week_dates:
+        return None
+
+    all_week_strs = [wd[1] for wd in week_dates]
+
+    # Parse data rows
+    parsed_rows = []
+    sort_order = 0
+    for row in rows[1:]:
+        if not row:
+            continue
+
+        action = row[0].strip() if len(row) > 0 else ""
+        owner = row[1].strip() if len(row) > 1 else ""
+        hours_str = row[2].strip() if len(row) > 2 else ""
+
+        if not action:
+            continue
+
+        # Skip summary rows
+        if action in ("Total Hours", "Remaining Hours"):
+            continue
+
+        hours = 0.0
+        try:
+            hours = float(hours_str)
+        except (ValueError, TypeError):
+            pass
+
+        objective = ""
+        if objective_col and len(row) > objective_col:
+            objective = row[objective_col].strip()
+        kpi = ""
+        if kpi_col and len(row) > kpi_col:
+            kpi = row[kpi_col].strip()
+
+        # Check week cells for content
+        week_notes = {}
+        first_week = None
+        last_week = None
+        for col_idx, week_date in week_dates:
+            if len(row) > col_idx and row[col_idx].strip():
+                week_notes[week_date] = row[col_idx].strip()
+                if first_week is None:
+                    first_week = week_date
+                last_week = week_date
+
+        # Determine row type: category (no owner, no hours, no objective) vs task
+        is_task = bool(owner) or hours > 0 or bool(objective)
+        row_type = "task" if is_task else "category"
+
+        # For tasks: determine date span
+        if row_type == "task":
+            start_week = first_week or all_week_strs[0]
+            end_week = last_week or all_week_strs[-1]
+        else:
+            start_week = ""
+            end_week = ""
+
+        parsed_rows.append({
+            "row_type": row_type,
+            "action": action,
+            "owner": owner,
+            "hours": hours,
+            "objective": objective,
+            "kpi": kpi,
+            "start_week": start_week,
+            "end_week": end_week,
+            "notes_json": json.dumps(week_notes),
+            "sort_order": sort_order,
+        })
+        sort_order += 1
+
+    return {"weeks": all_week_strs, "rows": parsed_rows}
+
+
+def parse_gantt_xlsx(file_bytes):
+    """Parse a marketing Gantt XLSX and return structured data."""
+    import openpyxl
+
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    ws = wb.active
+
+    rows = []
+    for row in ws.iter_rows(values_only=True):
+        rows.append([str(cell) if cell is not None else "" for cell in row])
+
+    if not rows:
+        return None
+
+    header = rows[0]
+
+    # Find week date columns and Objective/KPI positions
+    week_dates = []
+    objective_col = None
+    kpi_col = None
+
+    for i, col in enumerate(header):
+        col_stripped = col.strip()
+        if col_stripped == "Objective":
+            objective_col = i
+        elif col_stripped == "KPI":
+            kpi_col = i
+            break
+
+    # Week dates are between column 3 and the Objective column
+    end_col = objective_col if objective_col else len(header)
+    for i in range(3, end_col):
+        col_stripped = header[i].strip()
+        if not col_stripped:
+            continue
+        try:
+            dt = datetime.strptime(col_stripped, "%d-%b-%y")
+            week_dates.append((i, dt.strftime("%Y-%m-%d")))
+        except ValueError:
+            # Excel may store dates as "YYYY-MM-DD HH:MM:SS" strings
+            try:
+                dt = datetime.strptime(col_stripped[:10], "%Y-%m-%d")
+                week_dates.append((i, dt.strftime("%Y-%m-%d")))
+            except ValueError:
+                pass
+
+    if not week_dates:
+        return None
+
+    all_week_strs = [wd[1] for wd in week_dates]
+
+    # Parse data rows
+    parsed_rows = []
+    sort_order = 0
+    for row in rows[1:]:
+        if not row or all(c.strip() == "" for c in row):
+            continue
+
+        action = row[0].strip() if len(row) > 0 else ""
+        owner = row[1].strip() if len(row) > 1 else ""
+        hours_str = row[2].strip() if len(row) > 2 else ""
+
+        if not action:
+            continue
+
+        if action in ("Total Hours", "Remaining Hours"):
+            continue
+
+        hours = 0.0
+        try:
+            hours = float(hours_str)
+        except (ValueError, TypeError):
+            pass
+
+        objective = ""
+        if objective_col and len(row) > objective_col:
+            objective = row[objective_col].strip()
+        kpi = ""
+        if kpi_col and len(row) > kpi_col:
+            kpi = row[kpi_col].strip()
+
+        # Check week cells for content
+        week_notes = {}
+        first_week = None
+        last_week = None
+        for col_idx, week_date in week_dates:
+            if len(row) > col_idx and row[col_idx].strip():
+                week_notes[week_date] = row[col_idx].strip()
+                if first_week is None:
+                    first_week = week_date
+                last_week = week_date
+
+        is_task = bool(owner) or hours > 0 or bool(objective)
+        row_type = "task" if is_task else "category"
+
+        if row_type == "task":
+            start_week = first_week or all_week_strs[0]
+            end_week = last_week or all_week_strs[-1]
+        else:
+            start_week = ""
+            end_week = ""
+
+        parsed_rows.append({
+            "row_type": row_type,
+            "action": action,
+            "owner": owner,
+            "hours": hours,
+            "objective": objective,
+            "kpi": kpi,
+            "start_week": start_week,
+            "end_week": end_week,
+            "notes_json": json.dumps(week_notes),
+            "sort_order": sort_order,
+        })
+        sort_order += 1
+
+    return {"weeks": all_week_strs, "rows": parsed_rows}
+
+
+@app.route("/gantt")
+@login_required
+def gantt_list():
+    db = get_db()
+    groups = db.execute(
+        "SELECT * FROM gantt_groups WHERE user_id = ? ORDER BY updated DESC",
+        (session["user_id"],)
+    ).fetchall()
+    ungrouped = db.execute(
+        "SELECT * FROM gantt_charts WHERE user_id = ? AND (group_id IS NULL OR group_id = 0) ORDER BY updated DESC",
+        (session["user_id"],)
+    ).fetchall()
+    # Attach charts to each group
+    groups_with_charts = []
+    for g in groups:
+        charts = db.execute(
+            "SELECT * FROM gantt_charts WHERE group_id = ? ORDER BY updated DESC",
+            (g["id"],)
+        ).fetchall()
+        groups_with_charts.append({"group": g, "charts": charts})
+    return render_template("gantt/list.html", groups=groups_with_charts, ungrouped=ungrouped)
+
+
+@app.route("/gantt/group/new", methods=["GET", "POST"])
+@login_required
+def gantt_group_new():
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        if not name:
+            flash("Please enter a group name.", "error")
+            return redirect("/gantt/group/new")
+        db = get_db()
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = db.execute(
+            "INSERT INTO gantt_groups (user_id, name, created, updated) VALUES (?, ?, ?, ?)",
+            (session["user_id"], name, now, now)
+        )
+        db.commit()
+        flash(f"Group '{name}' created.", "success")
+        return redirect(f"/gantt/group/{cursor.lastrowid}")
+    return render_template("gantt/group_new.html")
+
+
+@app.route("/gantt/group/<int:group_id>")
+@login_required
+def gantt_group_view(group_id):
+    db = get_db()
+    group = db.execute(
+        "SELECT * FROM gantt_groups WHERE id = ? AND user_id = ?",
+        (group_id, session["user_id"])
+    ).fetchone()
+    if not group:
+        abort(404)
+    charts = db.execute(
+        "SELECT * FROM gantt_charts WHERE group_id = ? ORDER BY id",
+        (group_id,)
+    ).fetchall()
+    # If there are charts, show the first one by default
+    if charts:
+        return redirect(f"/gantt/{charts[0]['id']}")
+    return render_template("gantt/group_view.html", group=group, charts=charts)
+
+
+@app.route("/gantt/group/<int:group_id>/delete", methods=["POST"])
+@login_required
+def gantt_group_delete(group_id):
+    db = get_db()
+    # Ungroup charts (don't delete them)
+    db.execute("UPDATE gantt_charts SET group_id = NULL WHERE group_id = ?", (group_id,))
+    db.execute("DELETE FROM gantt_groups WHERE id = ? AND user_id = ?", (group_id, session["user_id"]))
+    db.commit()
+    flash("Group deleted. Charts have been ungrouped.", "success")
+    return redirect("/gantt")
+
+
+@app.route("/gantt/import", methods=["GET", "POST"])
+@login_required
+def gantt_import():
+    if request.method == "POST":
+        file = request.files.get("csv_file")
+        chart_name = request.form.get("name", "").strip()
+        group_id = request.form.get("group_id", "").strip()
+        brand_color = request.form.get("brand_color", "#2a5a8a").strip()
+
+        if not file or not file.filename:
+            flash("Please select a file.", "error")
+            return redirect("/gantt/import")
+
+        filename_lower = file.filename.lower()
+        if not filename_lower.endswith((".csv", ".xlsx")):
+            flash("Please upload a CSV or XLSX file.", "error")
+            return redirect("/gantt/import")
+
+        if not chart_name:
+            chart_name = file.filename.rsplit(".", 1)[0]
+
+        raw = file.read()
+
+        if filename_lower.endswith(".xlsx"):
+            parsed = parse_gantt_xlsx(raw)
+        else:
+            try:
+                content = raw.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                content = raw.decode("latin-1")
+            parsed = parse_gantt_csv(content)
+        if not parsed or not parsed["rows"]:
+            flash("Could not parse file. Check the format.", "error")
+            return redirect("/gantt/import")
+
+        db = get_db()
+        now = datetime.now(timezone.utc).isoformat()
+
+        gid = int(group_id) if group_id else None
+
+        cursor = db.execute(
+            "INSERT INTO gantt_charts (user_id, name, weeks_json, group_id, brand_color, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (session["user_id"], chart_name, json.dumps(parsed["weeks"]), gid, brand_color, now, now)
+        )
+        chart_id = cursor.lastrowid
+
+        for row in parsed["rows"]:
+            db.execute(
+                """INSERT INTO gantt_rows
+                   (chart_id, row_type, action, owner, hours, objective, kpi,
+                    status, start_week, end_week, notes_json, sort_order)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (chart_id, row["row_type"], row["action"], row["owner"],
+                 row["hours"], row["objective"], row["kpi"],
+                 "not_started", row["start_week"], row["end_week"],
+                 row["notes_json"], row["sort_order"])
+            )
+
+        db.commit()
+        flash(f"Imported '{chart_name}' with {len(parsed['rows'])} rows.", "success")
+        return redirect(f"/gantt/{chart_id}", code=303)
+
+    db = get_db()
+    groups = db.execute(
+        "SELECT * FROM gantt_groups WHERE user_id = ? ORDER BY name",
+        (session["user_id"],)
+    ).fetchall()
+    group_id = request.args.get("group_id", "")
+    return render_template("gantt/import.html", groups=groups, selected_group_id=group_id)
+
+
+@app.route("/gantt/<int:chart_id>")
+@login_required
+def gantt_view(chart_id):
+    db = get_db()
+    chart = db.execute(
+        "SELECT * FROM gantt_charts WHERE id = ? AND user_id = ?",
+        (chart_id, session["user_id"])
+    ).fetchone()
+    if not chart:
+        abort(404)
+
+    rows = db.execute(
+        "SELECT * FROM gantt_rows WHERE chart_id = ? ORDER BY sort_order",
+        (chart_id,)
+    ).fetchall()
+
+    weeks = json.loads(chart["weeks_json"])
+
+    # Group weeks by month for header
+    month_groups = []
+    current_month = None
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    scroll_to_week_index = 0
+    for idx, w in enumerate(weeks):
+        dt = datetime.strptime(w, "%Y-%m-%d")
+        month_label = dt.strftime("%b %Y")
+        if month_label != current_month:
+            month_groups.append({"label": month_label, "count": 1, "start_index": idx})
+            current_month = month_label
+        else:
+            month_groups[-1]["count"] += 1
+        # Find the week closest to today for auto-scroll
+        if w <= today_str:
+            scroll_to_week_index = idx
+
+    # Find the week that contains today (for column highlight)
+    today_week = ""
+    for i, w in enumerate(weeks):
+        if w <= today_str:
+            today_week = w
+        else:
+            break
+
+    # Format week labels
+    week_labels = []
+    for w in weeks:
+        dt = datetime.strptime(w, "%Y-%m-%d")
+        week_labels.append({"date": w, "label": dt.strftime("%d %b")})
+
+    # Process rows for template
+    processed_rows = []
+    for row in rows:
+        notes = json.loads(row["notes_json"]) if row["notes_json"] else {}
+        processed_rows.append({
+            "id": row["id"],
+            "row_type": row["row_type"],
+            "action": row["action"],
+            "owner": row["owner"],
+            "hours": row["hours"],
+            "objective": row["objective"],
+            "kpi": row["kpi"],
+            "status": row["status"],
+            "start_week": row["start_week"],
+            "end_week": row["end_week"],
+            "notes": notes,
+        })
+
+    # Stats
+    tasks = [r for r in processed_rows if r["row_type"] == "task"]
+    total_tasks = len(tasks)
+    complete_count = sum(1 for t in tasks if t["status"] == "complete")
+    total_hours = sum(t["hours"] for t in tasks)
+
+    # Sibling charts in the same group (for tabs)
+    group = None
+    sibling_charts = []
+    if chart["group_id"]:
+        group = db.execute(
+            "SELECT * FROM gantt_groups WHERE id = ?", (chart["group_id"],)
+        ).fetchone()
+        sibling_charts = db.execute(
+            "SELECT id, name, logo_path, brand_color FROM gantt_charts WHERE group_id = ? ORDER BY id",
+            (chart["group_id"],)
+        ).fetchall()
+
+    return render_template("gantt/view.html",
+                           chart=chart, rows=processed_rows,
+                           weeks=weeks, week_labels=week_labels,
+                           month_groups=month_groups,
+                           total_tasks=total_tasks, complete_count=complete_count,
+                           total_hours=total_hours,
+                           group=group, sibling_charts=sibling_charts,
+                           scroll_to_week_index=scroll_to_week_index,
+                           today=today_str,
+                           today_week=today_week,
+                           today_formatted=datetime.now().strftime("%d %b %Y"))
+
+
+@app.route("/gantt/<int:chart_id>/settings", methods=["GET", "POST"])
+@login_required
+def gantt_settings(chart_id):
+    db = get_db()
+    chart = db.execute(
+        "SELECT * FROM gantt_charts WHERE id = ? AND user_id = ?",
+        (chart_id, session["user_id"])
+    ).fetchone()
+    if not chart:
+        abort(404)
+
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        brand_color = request.form.get("brand_color", "#2a5a8a").strip()
+        group_id = request.form.get("group_id", "").strip()
+
+        if name:
+            db.execute("UPDATE gantt_charts SET name = ? WHERE id = ?", (name, chart_id))
+
+        db.execute("UPDATE gantt_charts SET brand_color = ? WHERE id = ?", (brand_color, chart_id))
+
+        gid = int(group_id) if group_id else None
+        db.execute("UPDATE gantt_charts SET group_id = ? WHERE id = ?", (gid, chart_id))
+
+        # Handle logo upload
+        logo_file = request.files.get("logo")
+        if logo_file and logo_file.filename:
+            ext = logo_file.filename.rsplit(".", 1)[-1].lower()
+            if ext in ("png", "jpg", "jpeg", "gif", "svg", "webp"):
+                logo_dir = UPLOAD_DIR / "logos"
+                logo_dir.mkdir(exist_ok=True)
+                fname = f"chart_{chart_id}_{secure_filename(logo_file.filename)}"
+                logo_file.save(str(logo_dir / fname))
+                db.execute("UPDATE gantt_charts SET logo_path = ? WHERE id = ?", (f"logos/{fname}", chart_id))
+
+        db.execute("UPDATE gantt_charts SET updated = ? WHERE id = ?",
+                    (datetime.now(timezone.utc).isoformat(), chart_id))
+        db.commit()
+        flash("Chart settings updated.", "success")
+        return redirect(f"/gantt/{chart_id}")
+
+    groups = db.execute(
+        "SELECT * FROM gantt_groups WHERE user_id = ? ORDER BY name",
+        (session["user_id"],)
+    ).fetchall()
+    return render_template("gantt/settings.html", chart=chart, groups=groups)
+
+
+@app.route("/gantt/<int:chart_id>/update-task", methods=["POST"])
+@login_required
+def gantt_update_task(chart_id):
+    db = get_db()
+    chart = db.execute(
+        "SELECT id FROM gantt_charts WHERE id = ? AND user_id = ?",
+        (chart_id, session["user_id"])
+    ).fetchone()
+    if not chart:
+        return jsonify({"error": "Not found"}), 404
+
+    data = request.get_json() if request.is_json else {}
+    row_id = data.get("row_id")
+    status = data.get("status")
+
+    if not row_id or status not in ("complete", "on_track", "behind", "not_started"):
+        return jsonify({"error": "Invalid data"}), 400
+
+    db.execute(
+        "UPDATE gantt_rows SET status = ? WHERE id = ? AND chart_id = ?",
+        (status, row_id, chart_id)
+    )
+    db.execute(
+        "UPDATE gantt_charts SET updated = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(), chart_id)
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/gantt/<int:chart_id>/delete", methods=["POST"])
+@login_required
+def gantt_delete(chart_id):
+    db = get_db()
+    chart = db.execute(
+        "SELECT group_id FROM gantt_charts WHERE id = ? AND user_id = ?",
+        (chart_id, session["user_id"])
+    ).fetchone()
+    db.execute(
+        "DELETE FROM gantt_charts WHERE id = ? AND user_id = ?",
+        (chart_id, session["user_id"])
+    )
+    db.commit()
+    flash("Chart deleted.", "success")
+    if chart and chart["group_id"]:
+        return redirect(f"/gantt/group/{chart['group_id']}")
+    return redirect("/gantt")
+
 
 # ══════════════════════════════════════════════════════════════════
 #  PLATFORM ADMIN — /admin/
