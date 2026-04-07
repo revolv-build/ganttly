@@ -917,99 +917,173 @@ def parse_gantt_csv(file_content):
 
 
 def parse_gantt_xlsx(file_bytes):
-    """Parse a marketing Gantt XLSX and return structured data."""
+    """Parse a marketing Gantt XLSX and return structured data.
+
+    Supports two layouts:
+    1. CSV-like: Action | Owner | Hours | week dates (DD-MMM-YY) | Objective | KPI
+    2. Color-based: Title row, month row, then header row with short dates (e.g. "1 Apr"),
+       Gantt bars indicated by colored cell backgrounds rather than text content.
+    """
     import openpyxl
 
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     ws = wb.active
 
-    rows = []
-    for row in ws.iter_rows(values_only=True):
-        rows.append([str(cell) if cell is not None else "" for cell in row])
+    # Also load with formatting to read cell colors
+    wb_fmt = openpyxl.load_workbook(io.BytesIO(file_bytes))
+    ws_fmt = wb_fmt.active
 
-    if not rows:
-        return None
+    # Identify merged cell rows (full-width merges = category rows)
+    cat_rows = set()
+    for mr in ws.merged_cells.ranges:
+        rng = str(mr)
+        if rng.startswith("A") and mr.min_row == mr.max_row and (mr.max_col - mr.min_col) >= 4:
+            cat_rows.add(mr.min_row)
 
-    header = rows[0]
-
-    # Find week date columns and Objective/KPI positions
-    week_dates = []
-    objective_col = None
-    kpi_col = None
-
-    for i, col in enumerate(header):
-        col_stripped = col.strip()
-        if col_stripped == "Objective":
-            objective_col = i
-        elif col_stripped == "KPI":
-            kpi_col = i
+    # Find the header row — look for a row containing "Owner" in column B
+    header_row_idx = None
+    for row_idx in range(1, min(ws.max_row + 1, 10)):
+        cell_b = ws.cell(row=row_idx, column=2).value
+        if cell_b and str(cell_b).strip().lower() == "owner":
+            header_row_idx = row_idx
             break
 
-    # Week dates are between column 3 and the Objective column
+    if header_row_idx is None:
+        return None
+
+    header = [str(ws.cell(row=header_row_idx, column=c).value or "").strip()
+              for c in range(1, ws.max_column + 1)]
+
+    # Detect layout: find where week columns start and what format they use
+    # Check for Hours column and Objective/KPI columns
+    hours_col = None
+    objective_col = None
+    kpi_col = None
+    for i, col in enumerate(header):
+        col_lower = col.lower()
+        if col_lower == "hours":
+            hours_col = i
+        elif col_lower == "objective":
+            objective_col = i
+        elif col_lower == "kpi":
+            kpi_col = i
+
+    # Determine first week column (after Owner, and optionally Hours)
+    first_week_col = 2  # default: column C (index 2)
+    if hours_col is not None:
+        first_week_col = hours_col + 1
+
+    # Determine the year from the spreadsheet (check row 1 or 2 for year mention)
+    inferred_year = None
+    for row_idx in range(1, header_row_idx):
+        for col_idx in range(1, min(ws.max_column + 1, 20)):
+            val = ws.cell(row=row_idx, column=col_idx).value
+            if val:
+                import re as _re
+                year_match = _re.search(r"20\d{2}", str(val))
+                if year_match:
+                    inferred_year = int(year_match.group())
+                    break
+        if inferred_year:
+            break
+    if not inferred_year:
+        inferred_year = datetime.now().year
+
+    # Parse week date columns
     end_col = objective_col if objective_col else len(header)
-    for i in range(3, end_col):
-        col_stripped = header[i].strip()
+    week_dates = []
+    for i in range(first_week_col, end_col):
+        col_stripped = header[i]
         if not col_stripped:
             continue
+        # Try DD-MMM-YY format first (CSV-like layout)
         try:
             dt = datetime.strptime(col_stripped, "%d-%b-%y")
             week_dates.append((i, dt.strftime("%Y-%m-%d")))
+            continue
         except ValueError:
-            # Excel may store dates as "YYYY-MM-DD HH:MM:SS" strings
-            try:
-                dt = datetime.strptime(col_stripped[:10], "%Y-%m-%d")
-                week_dates.append((i, dt.strftime("%Y-%m-%d")))
-            except ValueError:
-                pass
+            pass
+        # Try short format like "1 Apr", "13 May" (color-based layout)
+        try:
+            dt = datetime.strptime(f"{col_stripped} {inferred_year}", "%d %b %Y")
+            week_dates.append((i, dt.strftime("%Y-%m-%d")))
+            continue
+        except ValueError:
+            pass
 
     if not week_dates:
         return None
 
     all_week_strs = [wd[1] for wd in week_dates]
 
+    # Colors to ignore when detecting Gantt bars (white / no fill)
+    white_fills = {"FFFFFFFF", "00000000"}
+
     # Parse data rows
     parsed_rows = []
     sort_order = 0
-    for row in rows[1:]:
-        if not row or all(c.strip() == "" for c in row):
+    for row_idx in range(header_row_idx + 1, ws.max_row + 1):
+        action_val = ws.cell(row=row_idx, column=1).value
+        if action_val is None:
             continue
-
-        action = row[0].strip() if len(row) > 0 else ""
-        owner = row[1].strip() if len(row) > 1 else ""
-        hours_str = row[2].strip() if len(row) > 2 else ""
-
+        action = str(action_val).strip()
         if not action:
             continue
 
-        if action in ("Total Hours", "Remaining Hours"):
+        # Skip summary / legend rows
+        if action.upper() in ("TOTAL HOURS", "REMAINING HOURS", "COLOUR KEY:"):
+            continue
+        # Skip milestone-like header rows without useful data
+        if action.upper() == "KEY MILESTONES":
             continue
 
+        owner = str(ws.cell(row=row_idx, column=2).value or "").strip()
+
         hours = 0.0
-        try:
-            hours = float(hours_str)
-        except (ValueError, TypeError):
-            pass
+        if hours_col is not None:
+            hours_val = ws.cell(row=row_idx, column=hours_col + 1).value
+            if hours_val is not None:
+                try:
+                    hours = float(hours_val)
+                except (ValueError, TypeError):
+                    pass
 
         objective = ""
-        if objective_col and len(row) > objective_col:
-            objective = row[objective_col].strip()
+        if objective_col is not None:
+            obj_val = ws.cell(row=row_idx, column=objective_col + 1).value
+            if obj_val:
+                objective = str(obj_val).strip()
         kpi = ""
-        if kpi_col and len(row) > kpi_col:
-            kpi = row[kpi_col].strip()
+        if kpi_col is not None:
+            kpi_val = ws.cell(row=row_idx, column=kpi_col + 1).value
+            if kpi_val:
+                kpi = str(kpi_val).strip()
 
-        # Check week cells for content
+        # Check week cells — look for text content OR colored backgrounds (Gantt bars)
         week_notes = {}
         first_week = None
         last_week = None
         for col_idx, week_date in week_dates:
-            if len(row) > col_idx and row[col_idx].strip():
-                week_notes[week_date] = row[col_idx].strip()
+            cell_val = ws.cell(row=row_idx, column=col_idx + 1).value
+            cell_text = str(cell_val).strip() if cell_val else ""
+
+            # Check for colored fill (Gantt bar)
+            fmt_cell = ws_fmt.cell(row=row_idx, column=col_idx + 1)
+            has_color = False
+            if fmt_cell.fill and fmt_cell.fill.fgColor and fmt_cell.fill.fgColor.rgb:
+                rgb = str(fmt_cell.fill.fgColor.rgb)
+                if rgb not in white_fills:
+                    has_color = True
+
+            if cell_text or has_color:
+                week_notes[week_date] = cell_text if cell_text else ""
                 if first_week is None:
                     first_week = week_date
                 last_week = week_date
 
-        is_task = bool(owner) or hours > 0 or bool(objective)
-        row_type = "task" if is_task else "category"
+        # Determine row type
+        is_category = row_idx in cat_rows and not owner
+        row_type = "category" if is_category else "task"
 
         if row_type == "task":
             start_week = first_week or all_week_strs[0]
